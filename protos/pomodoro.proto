@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+option go_package = "github.com/scjudd/pomodoro/proto";
+
+message TaskList {
+  repeated Task items = 1;
+}
+
+message Task {
+  int32 pomodoros = 1;
+  int32 completed = 2;
+  string description = 3;
+}

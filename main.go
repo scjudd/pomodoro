@@ -15,19 +15,22 @@ import (
 
 const pomodoroDuration = 15 * time.Minute
 
-var tasks = []task{}
+var tasks = []*task{}
 var debugEnabled = false
 
 type mode int
 
 const (
 	modeNormal mode = iota
+	modeNormalError
 	modeEditCompleted
 	modeDeleteConfirm
+	modeLoadConfirm
 	modeReorder
 )
 
 type userInterface struct {
+	filename       string
 	mode           mode
 	promptInstance *prompt
 	statusLine     string
@@ -45,6 +48,11 @@ var ui = userInterface{
 	timeRemaining: pomodoroDuration,
 }
 
+func (ui *userInterface) handleError(err error) {
+	ui.changeMode(modeNormalError)
+	ui.statusLine = err.Error()
+}
+
 func (ui *userInterface) changeMode(m mode) {
 	ui.mode = m
 	switch ui.mode {
@@ -54,6 +62,8 @@ func (ui *userInterface) changeMode(m mode) {
 		ui.statusLine = "Edit completed pomodoros with +/-"
 	case modeDeleteConfirm:
 		ui.statusLine = "Delete selected task?"
+	case modeLoadConfirm:
+		ui.statusLine = "Replace existing tasks?"
 	case modeReorder:
 		ui.statusLine = "Moving selected task..."
 	}
@@ -107,19 +117,20 @@ func (ui *userInterface) redraw() {
 		} else {
 			fmt.Print(msg)
 		}
-		return
 	}
 
 	timerTop := (ui.rows - len(tasks)) / 2
-	if ui.running {
-		fmt.Print(escSgrReverseVideo)
-	}
-	msg := fmt.Sprintf("Time remaining: %s", ui.timeRemaining.String())
-	ui.moveCursor(timerTop, (ui.cols-len(msg))/2)
-	if len(msg) > ui.cols {
-		fmt.Print(msg[:ui.cols-3], "...", escSgrReset)
-	} else {
-		fmt.Print(msg, escSgrReset)
+	if len(tasks) > 0 {
+		if ui.running {
+			fmt.Print(escSgrReverseVideo)
+		}
+		msg := fmt.Sprintf("Time remaining: %s", ui.timeRemaining.String())
+		ui.moveCursor(timerTop, (ui.cols-len(msg))/2)
+		if len(msg) > ui.cols {
+			fmt.Print(msg[:ui.cols-3], "...", escSgrReset)
+		} else {
+			fmt.Print(msg, escSgrReset)
+		}
 	}
 
 	maxPomodoroString, maxDescription := 0, 0
@@ -174,7 +185,7 @@ func (ui *userInterface) redraw() {
 	}
 }
 
-func pomodoroString(task task) string {
+func pomodoroString(task *task) string {
 	var sb strings.Builder
 	if task.completed > 0 {
 		sb.WriteString("⬢ ")
@@ -192,7 +203,7 @@ func pomodoroString(task task) string {
 func actionAddTask() {
 	description := ui.prompt("Add > ", "")
 	if len(description) > 0 {
-		tasks = append(tasks, task{pomodoros: 1, description: description})
+		tasks = append(tasks, &task{pomodoros: 1, description: description})
 	}
 }
 
@@ -259,6 +270,27 @@ func actionEditTaskDescription() {
 	}
 }
 
+func actionLoadFile() {
+	if len(tasks) > 0 {
+		actionChangeMode(modeLoadConfirm)
+	} else {
+		actionLoadFileConfirm()
+	}
+}
+
+func actionLoadFileConfirm() {
+	newFilename := ui.prompt("Load from: ", ui.filename)
+	if len(newFilename) > 0 {
+		newTasks, err := load(newFilename)
+		if err != nil {
+			ui.handleError(err)
+		} else {
+			tasks = newTasks
+			ui.filename = newFilename
+		}
+	}
+}
+
 func actionMoveTask(relative int) {
 	thisIndex, otherIndex := ui.selected, ui.selected+relative
 	if otherIndex < 0 || otherIndex > len(tasks)-1 {
@@ -273,6 +305,13 @@ func actionMoveTask(relative int) {
 	}
 }
 
+func actionSetFilename() {
+	newFilename := ui.prompt("Save as: ", ui.filename)
+	if len(newFilename) > 0 {
+		ui.filename = newFilename
+	}
+}
+
 func actionResetTimer() {
 	ui.resetTimer()
 }
@@ -281,17 +320,21 @@ func handleInput(r rune) {
 	switch ui.mode {
 	case modeNormal:
 		handleInputNormal(r)
+	case modeNormalError:
+		handleInputNormalError(r)
 	case modeEditCompleted:
 		handleInputEditCompleted(r)
 	case modeDeleteConfirm:
 		handleInputDeleteConfirm(r)
+	case modeLoadConfirm:
+		handleInputLoadConfirm(r)
 	case modeReorder:
 		handleInputReorder(r)
 	}
 }
 
 func handleInputNormal(r rune) {
-	if len(tasks) == 0 && r != 'a' {
+	if len(tasks) == 0 && r != 'a' && r != 'L' && r != 'S' {
 		// No other action is valid if we don't have any tasks yet.
 		return
 	}
@@ -315,11 +358,20 @@ func handleInputNormal(r rune) {
 		actionResetTimer()
 	case 'E':
 		actionChangeMode(modeEditCompleted)
+	case 'L':
+		actionLoadFile()
+	case 'S':
+		actionSetFilename()
 	case '-':
 		actionChangePomodoros(-1)
 	case '+':
 		actionChangePomodoros(1)
 	}
+}
+
+func handleInputNormalError(r rune) {
+	actionChangeMode(modeNormal)
+	handleInputNormal(r)
 }
 
 func handleInputEditCompleted(r rune) {
@@ -338,6 +390,14 @@ func handleInputDeleteConfirm(r rune) {
 		actionDeleteTask()
 	}
 	actionChangeMode(modeNormal)
+}
+
+func handleInputLoadConfirm(r rune) {
+	if r == 'y' {
+		actionLoadFileConfirm()
+	} else {
+		actionChangeMode(modeNormal)
+	}
 }
 
 func handleInputReorder(r rune) {
@@ -373,8 +433,23 @@ func timerLoop() {
 }
 
 func main() {
-	if len(os.Args) >= 2 && os.Args[1] == "debug" {
-		debugEnabled = true
+	var filename string
+	for _, arg := range os.Args[1:] {
+		if arg == "debug" {
+			debugEnabled = true
+			continue
+		}
+		filename = arg
+	}
+
+	if filename != "" {
+		var err error
+		tasks, err = load(filename)
+		if err != nil {
+			ui.handleError(err)
+		} else {
+			ui.filename = filename
+		}
 	}
 
 	handleSignal(syscall.SIGWINCH, ui.resize)
@@ -382,6 +457,9 @@ func main() {
 	handleSignal(os.Interrupt, func() {
 		fmt.Print(escXtermAlternativeScreenDisable, escCursorShow)
 		restoreTerminalMode()
+		if ui.filename != "" {
+			save(ui.filename, tasks)
+		}
 		os.Exit(0)
 	})
 
