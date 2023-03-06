@@ -13,6 +13,7 @@ type prompt struct {
 	cols   int
 	bottom int
 	buf    []rune
+	start  int
 	cur    int
 }
 
@@ -24,7 +25,29 @@ func newPromptWithLine(promptString, line string, rows, cols int) *prompt {
 	p := newPrompt(promptString, rows, cols)
 	p.buf = []rune(line)
 	p.cur = len(p.buf)
+	p.start = len(p.buf) - p.bufferWidth()
+	if p.start < 0 {
+		p.start = 0
+	}
 	return p
+}
+
+func (p *prompt) bufferWidth() int {
+	return p.cols - utf8.RuneCountInString(p.prompt) - 1
+}
+
+func (p *prompt) bufferSlice() []rune {
+	for p.cur < p.start {
+		p.start--
+	}
+	for p.cur > p.start+p.bufferWidth() {
+		p.start++
+	}
+	end := p.start + p.bufferWidth()
+	if end > len(p.buf) {
+		end = len(p.buf)
+	}
+	return p.buf[p.start:end]
 }
 
 func (p *prompt) resize(rows, cols int) {
@@ -39,15 +62,6 @@ func (p *prompt) redraw() {
 		return
 	}
 
-	// If the length of the prompt and buffer are greater than the number
-	// of columns, trim the left side of the buffer and adjust the display
-	// position of the cursor so everything fits.
-	buf, cur := p.buf, p.cur+1
-	for len(buf) >= p.cols-utf8.RuneCountInString(p.prompt) {
-		buf = buf[1:]
-		cur--
-	}
-
 	var sb strings.Builder
 
 	sb.WriteString(escCursorHide)
@@ -55,9 +69,10 @@ func (p *prompt) redraw() {
 	sb.WriteString(escClearLine)
 
 	sb.WriteString(p.prompt)
-	sb.WriteString(string(buf))
+	sb.WriteString(string(p.bufferSlice()))
 
-	sb.WriteString(escCursorMove(p.bottom, utf8.RuneCountInString(p.prompt)+cur))
+	cur := p.cur - p.start + utf8.RuneCountInString(p.prompt) + 1
+	sb.WriteString(escCursorMove(p.bottom, cur))
 	sb.WriteString(escCursorShow)
 
 	_, err := io.WriteString(os.Stdout, sb.String())
