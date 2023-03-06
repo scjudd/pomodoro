@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -120,11 +122,11 @@ func (ui *userInterface) redraw() {
 		fmt.Print(msg, escSgrReset)
 	}
 
-	maxPomoString, maxDescription := 0, 0
+	maxPomodoroString, maxDescription := 0, 0
 	for _, task := range tasks {
-		pomoStringLen := utf8.RuneCountInString(task.PomoString())
-		if pomoStringLen > maxPomoString {
-			maxPomoString = pomoStringLen
+		pomoStringLen := utf8.RuneCountInString(pomodoroString(task))
+		if pomoStringLen > maxPomodoroString {
+			maxPomodoroString = pomoStringLen
 		}
 		if len(task.description) > maxDescription {
 			maxDescription = len(task.description)
@@ -134,9 +136,9 @@ func (ui *userInterface) redraw() {
 	const selectionMarker = "› "
 	var selectionMarkerLen = utf8.RuneCountInString(selectionMarker)
 
-	lineLength := selectionMarkerLen + maxPomoString + maxDescription
+	lineLength := selectionMarkerLen + maxPomodoroString + maxDescription
 	if lineLength > ui.cols {
-		maxDescription = ui.cols - selectionMarkerLen - maxPomoString
+		maxDescription = ui.cols - selectionMarkerLen - maxPomodoroString
 		lineLength = ui.cols
 	}
 
@@ -151,9 +153,9 @@ func (ui *userInterface) redraw() {
 		}
 
 		ui.moveCursor(ui.cursorRow, ui.cursorCol+selectionMarkerLen)
-		fmt.Print(escSgrForegroundRed, task.PomoString(), escSgrReset)
+		fmt.Print(escSgrForegroundRed, pomodoroString(task), escSgrReset)
 
-		ui.moveCursor(ui.cursorRow, ui.cursorCol+maxPomoString)
+		ui.moveCursor(ui.cursorRow, ui.cursorCol+maxPomodoroString)
 		if index == ui.active {
 			fmt.Print(escSgrReverseVideo)
 		}
@@ -170,6 +172,21 @@ func (ui *userInterface) redraw() {
 		ui.moveCursor(ui.rows, 0)
 		fmt.Print(escClearLine, ui.statusLine)
 	}
+}
+
+func pomodoroString(task task) string {
+	var sb strings.Builder
+	if task.completed > 0 {
+		sb.WriteString("⬢ ")
+		sb.WriteString(strconv.Itoa(task.completed))
+		sb.WriteString(" ")
+	}
+	if task.pomodoros-task.completed > 0 {
+		sb.WriteString("⬡ ")
+		sb.WriteString(strconv.Itoa(task.pomodoros - task.completed))
+		sb.WriteString(" ")
+	}
+	return sb.String()
 }
 
 func actionAddTask() {
